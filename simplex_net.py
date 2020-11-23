@@ -11,6 +11,11 @@
    There are two classes, one for the database and one for the records.
 
    TODO update database by finding records - by record ID - that haven't been entered yet
+   TODO Automate ftp upload to web
+   TODO put plots into bokeh frame
+   TODO how to handle adding and removing stations from the form and how does this affect the spreadheet?
+   TODO remove the hard wired sheet range
+   TODO what to do with missing hams
 
 """
 # from __future__ import print_function
@@ -27,9 +32,11 @@ from apiclient import discovery
 import pandas as pd
 import numpy as np
 from bokeh.models import Dot, Circle, Asterisk, HoverTool, ColumnDataSource, LegendItem, Legend
-from bokeh.plotting import figure
+from bokeh.plotting import figure, curdoc
 # from bokeh.io import output_notebook
+# noinspection PyUnresolvedReferences
 from bokeh.tile_providers import get_provider, OSM
+from bokeh.layouts import gridplot
 
 
 class SimplexReportDatabase:
@@ -127,7 +134,7 @@ class SimplexReportDatabase:
         cur.execute(
             "CREATE TABLE RESPONSES (Id TEXT, ReportingTimestamp DATETIME, SubmittingCall TINYTEXT, DateOfNet DATE, " +
             "FrequencyOfNet FLOAT, TransmitPower TINYTEXT, TransmitHeight TINYTEXT, SubmittedLatitude FLOAT, " +
-            "SubmittedLongtitude FLOAT, Comment TEXT, ReceivedCall TINYTEXT, ReceivedQuality TINYTEXT)")
+            "SubmittedLongitude FLOAT, Comment TEXT, ReceivedCall TINYTEXT, ReceivedQuality TINYTEXT)")
 
         self.con.commit()
 
@@ -244,7 +251,7 @@ class SimplexReportDatabase:
 
             for call in responses.keys():
                 command = "INSERT INTO RESPONSES(Id, ReportingTimestamp, SubmittingCall, DateOfNet, FrequencyOfNet," +\
-                          " TransmitPower, TransmitHeight, SubmittedLatitude, SubmittedLongtitude, Comment," +\
+                          " TransmitPower, TransmitHeight, SubmittedLatitude, SubmittedLongitude, Comment," +\
                           " ReceivedCall, ReceivedQuality)" +\
                           " VALUES ('{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', '{}', '{}', '{}', '{}')".format(
                               record_id, clean_report[0], clean_report[1], clean_report[2], clean_report[3],
@@ -399,6 +406,11 @@ class SimplexReportDatabase:
                                map_extent=150):
         """plot the reception of a specific ham on a specific frequency
         for all reports in the database
+        :param str transmitting_station: station call sign
+        :param float frequency:
+        :param float map_scale:
+        :param float map_extent:
+        :return object: bokeh plot object
         """
         # get the reception data from the reports
         reception_df = self.get_one_ham_reception_data(transmitting_station, frequency)
@@ -442,3 +454,16 @@ class SimplexReportDatabase:
                                    LegendItem(label='Transmission', renderers=[g_transmitting_r])]))
 
         return p
+
+    def plot_all_stations(self, frequency):
+        """make reception plots for all the stations in the Hams table
+        """
+        plot_list = []
+
+        for station in self.ham_locations_df['Call']:
+            plot_list.append(self.plot_station_reception(station, frequency))
+
+        layout = gridplot(plot_list)
+
+        curdoc().add_root(layout)
+        curdoc().title = f"Reception plots for {frequency} MHz"
