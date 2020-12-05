@@ -211,8 +211,19 @@ class SimplexReportDatabase:
 
     @staticmethod
     def clean_up_report(report):
+        """catch all the foibles of hams entering data improperly"""
+
+        # call sign should be just the call sign
+        call_str = report[1].split()
+        if len(call_str) > 1:
+            report[1] = call_str.pop(0)
+            report[8] = report[8]+' '+' '.join(call_str)
+
         # call sign must be all caps
         report[1] = report[1].upper()
+
+        # call sign should not have trailing blanks
+        report[1] = report[1].strip()
 
         report[5] = re.sub('[\']', ' ft', report[5])
         report[5] = re.sub('[\"]', ' in', report[5])
@@ -245,8 +256,12 @@ class SimplexReportDatabase:
                 command = f"SELECT * FROM Hams WHERE Call=\'{report[1]}\'"
                 cur.execute(command)
                 transmit_ham = cur.fetchone()
-                report[6] = transmit_ham[2]
-                report[7] = transmit_ham[3]
+
+                if transmit_ham is not None:
+                    report[6] = transmit_ham[2]
+                    report[7] = transmit_ham[3]
+                else:
+                    print(f'problem with {command} in populate_database_with_reports')
 
             for call in responses.keys():
                 command = "INSERT INTO RESPONSES(Id, ReportingTimestamp, SubmittingCall, DateOfNet, FrequencyOfNet," +\
@@ -486,6 +501,8 @@ class SimplexReportDatabase:
             plot_list.append(one_plot)
 
         output_file(html_path)
+
+        print(f'generated plots for {len(self.ham_locations_df)} call signs')
 
         g = gridplot(plot_list, ncols=2, plot_width=400, plot_height=600)
         show(g)

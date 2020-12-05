@@ -10,7 +10,8 @@ import os
 station_locations_filename = r'C:\Users\Marinna\projects\hamradio\ARES\CallSignLocations.txt'
 # google_sheet_url = r'https://docs.google.com/spreadsheets/d/the_id_is_here/edit#gid=66781920'
 spreadsheet_id = '1a_la9p_qD5i58dc3mGABIT4H7zq2lRjniEHfWuLPyvc'
-range_name = 'Form Responses 1!A1:AH33'
+# range_name = 'Form Responses 1!A1:AH33'
+range_name = 'Form Responses 1!A:AH'
 key = 'AIzaSyAkzQCwmEfohkWNGau6Gysf42NPlUfeN9Q'
 # TODO remove these hardwired names
 report_database_filename = '2mreports.db'
@@ -29,6 +30,8 @@ db = srd(report_database_filename,
          recreate_database=True)
 
 db.plot_all_stations_to_html(frequency_of_net)
+
+print(db)
 
 # do some plotting
 
