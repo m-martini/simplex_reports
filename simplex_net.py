@@ -12,7 +12,6 @@
 
    TODO update database by finding records - by record ID - that haven't been entered yet
    TODO Automate ftp upload to web
-   TODO put plots into bokeh frame
    TODO how to handle adding and removing stations from the form and how does this affect the spreadheet?
    TODO remove the hard wired sheet range
    TODO what to do with missing hams
@@ -31,9 +30,9 @@ import httplib2
 from apiclient import discovery
 import pandas as pd
 import numpy as np
-from bokeh.models import Dot, Circle, Asterisk, HoverTool, ColumnDataSource, LegendItem, Legend
-from bokeh.plotting import figure, curdoc
-# from bokeh.io import output_notebook
+from bokeh.models import Dot, Circle, Asterisk, HoverTool, ColumnDataSource, LegendItem, Legend, Label
+from bokeh.plotting import figure, show
+from bokeh.io import output_file
 # noinspection PyUnresolvedReferences
 from bokeh.tile_providers import get_provider, OSM
 from bokeh.layouts import gridplot
@@ -66,7 +65,7 @@ class SimplexReportDatabase:
             if os.path.exists(report_database_filename):
                 os.remove(report_database_filename)
 
-            hams = self.read_station_location_file(station_locations_filename)
+            hams = self.read_station_information_file(station_locations_filename)
             form_data = self.get_form_results(spreadsheet_id, range_name, key)
             self.initialize_new_database(hams, report_database_filename)
             self.populate_database_with_reports(form_data)
@@ -80,7 +79,7 @@ class SimplexReportDatabase:
     def remove_control_characters(s):
         return "".join(ch for ch in s if unicodedata.category(ch)[0] != "C")
 
-    def read_station_location_file(self, station_information_file):
+    def read_station_information_file(self, station_information_file):
         hams = []  # will be a list of dicts
         infile = open(station_information_file, 'r')
         infile.readline()  # skip the header
@@ -377,16 +376,21 @@ class SimplexReportDatabase:
         tile_provider = get_provider(OSM)
 
         # Establish the bokeh plot object and add the map tile as an underlay. Hide x and y axis.
-        p = figure(
-            title=title_string,
-            match_aspect=True,
-            tools='wheel_zoom,pan,reset,save',
-            x_range=(x_min, x_max),
-            y_range=(y_min, y_max),
-            x_axis_type='mercator',
-            y_axis_type='mercator',
-            width=500
-        )
+        kwargs = {
+            "title": title_string,
+            "match_aspect": True,
+            "tools": 'wheel_zoom,pan,reset,save',
+            "x_range": (x_min, x_max),
+            "y_range": (y_min, y_max),
+            "x_axis_type": 'mercator',
+            "y_axis_type": 'mercator',
+            "width": 500
+        }
+
+        if title_string is not None:
+            kwargs['title'] = title_string
+
+        p = figure(**kwargs)
 
         p.grid.visible = True
 
@@ -395,7 +399,9 @@ class SimplexReportDatabase:
 
         p.xaxis.visible = False
         p.yaxis.visible = False
-        p.title.text_font_size = "20px"
+
+        if title_string is not None:
+            p.title.text_font_size = "20px"
 
         return p
 
@@ -420,7 +426,8 @@ class SimplexReportDatabase:
         # Create the base map and plot, do not add hover tool yet
         title_string = f'where {transmitting_station} was heard on {frequency}'
 
-        p = self.initiate_map_plot_object(map_scale, map_extent, title_string)
+        p = self.initiate_map_plot_object(map_scale, map_extent, None)
+        # p = self.initiate_map_plot_object(map_scale, map_extent, title_string)
         source_hamlist = ColumnDataSource(self.ham_locations_df)
         source_reports = ColumnDataSource(reception_df)
 
@@ -445,6 +452,12 @@ class SimplexReportDatabase:
         g_transmitting = Asterisk(x=x, y=y, size=10, line_color='blue')
         g_transmitting_r = p.add_glyph(g_transmitting)
 
+        # add text within the plot to save room
+        # https://docs.bokeh.org/en/latest/docs/user_guide/layout.html#userguide-layout
+        plot_label = Label(x=10, y=27, x_units='screen', y_units='screen', text=title_string,
+                           render_mode='css',
+                           background_fill_color='white', background_fill_alpha=1.0)
+
         # now add the over tool for this data, only for the participating hams
         g_hamlist_hover = HoverTool(renderers=[g_hamlist_r], tooltips=[('', '@Call')])
         p.add_tools(g_hamlist_hover)
@@ -452,18 +465,28 @@ class SimplexReportDatabase:
         p.add_layout(Legend(items=[LegendItem(label='Station', renderers=[g_hamlist_r]),
                                    LegendItem(label='Reception', renderers=[g_reception_r]),
                                    LegendItem(label='Transmission', renderers=[g_transmitting_r])]))
+        p.add_layout(plot_label)
+
+        p.add_layout(Label(x=10, y=12, x_units='screen', y_units='screen',
+                           text='circles: G/R large, W/R small', render_mode='css',
+                           background_fill_color='white', background_fill_alpha=1.0))
 
         return p
 
-    def plot_all_stations(self, frequency):
+    def plot_all_stations_to_html(self, frequency, html_path="index.html"):
         """make reception plots for all the stations in the Hams table
         """
         plot_list = []
 
+        if os.path.exists(html_path):
+            os.remove(html_path)
+
         for station in self.ham_locations_df['Call']:
-            plot_list.append(self.plot_station_reception(station, frequency))
+            one_plot = self.plot_station_reception(station, frequency)
+            plot_list.append(one_plot)
 
-        layout = gridplot(plot_list)
+        output_file(html_path)
 
-        curdoc().add_root(layout)
-        curdoc().title = f"Reception plots for {frequency} MHz"
+        g = gridplot(plot_list, ncols=2, plot_width=400, plot_height=600)
+        show(g)
+

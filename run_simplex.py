@@ -1,7 +1,8 @@
 from simplex_net import SimplexReportDatabase as srd
 # from bokeh.models import Dot, Circle, Asterisk, HoverTool, ColumnDataSource, LegendItem, Legend
 from bokeh.plotting import show, save
-from bokeh.io import export_png # import output_notebook
+from bokeh.io import export_png, output_file  # import output_notebook
+from bokeh.layouts import column, gridplot
 # from bokeh.tile_providers import get_provider, OSM
 import numpy as np
 import os
@@ -13,6 +14,7 @@ range_name = 'Form Responses 1!A1:AH33'
 key = 'AIzaSyAkzQCwmEfohkWNGau6Gysf42NPlUfeN9Q'
 # TODO remove these hardwired names
 report_database_filename = '2mreports.db'
+display_jpg_filename = "jpg_list.html"
 
 # we want to plot who heard this ham, how well and where
 station_transmitting = 'KC1MUC'
@@ -26,21 +28,26 @@ db = srd(report_database_filename,
          key=key,
          recreate_database=True)
 
+db.plot_all_stations_to_html(frequency_of_net)
+
 # do some plotting
 
-p = db.plot_station_reception(station_transmitting, frequency_of_net)
+# p = db.plot_station_reception(station_transmitting, frequency_of_net)
 
-show(p)
+# show(p)
 
-if os.path.exists("index.html"):
-    os.remove("index.html")
+"""
+if os.path.exists(display_jpg_filename):
+    os.remove(display_jpg_filename)
 
-with open("index.html", 'w') as fp:
+with open(display_jpg_filename, 'w') as fp:
     fp.write("<html>\n" +
              "<head>\n")
     fp.write(f"<title> Simplex Reports for {frequency_of_net} MHz </title>")
     fp.write("</head>\n")
     fp.write("<body>\n")
+
+    plot_list = []
 
     for station in db.ham_locations_df['Call']:
         p = db.plot_station_reception(station, frequency_of_net)
@@ -50,13 +57,12 @@ with open("index.html", 'w') as fp:
         f = export_png(p, filename=file_name)
         fp.write(f"<img src=\"{file_name}\"><br>\n")
         print(f)
+        plot_list.append(p)
 
     fp.write("</body>\n")
     fp.write("</html>\n")
+"""
 
-
-
-# db.plot_all_stations(frequency_of_net)
 
 # go futher - can we build this and run it on criticalthinker?
 # https://github.com/bokeh/bokeh/tree/branch-2.3/examples/app/movies
