@@ -18,8 +18,9 @@ report_database_filename = '2mreports.db'
 display_jpg_filename = "jpg_list.html"
 
 # we want to plot who heard this ham, how well and where
-station_transmitting = 'KC1MUC'
-frequency_of_net = 146.58
+station_transmitting = 'W1FX'
+# frequency_of_net = 146.58
+frequency_of_net = 446.25
 
 # Create the database from scratch
 db = srd(report_database_filename,
@@ -52,7 +53,7 @@ with open(display_jpg_filename, 'w') as fp:
 
     plot_list = []
 
-    for station in db.ham_locations_df['Call']:
+    for station in db.home_station_information_df['Call']:
         p = db.plot_station_reception(station, frequency_of_net)
         file_name = f"report_{station}_{np.floor(frequency_of_net)}.png"
         plot_title = f"{station}_{frequency_of_net}"

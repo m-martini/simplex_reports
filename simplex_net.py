@@ -12,7 +12,7 @@
 
    TODO update database by finding records - by record ID - that haven't been entered yet
    TODO Automate ftp upload to web
-   TODO how to handle adding and removing stations from the form and how does this affect the spreadheet?
+   TODO how to handle adding and removing stations from the form and how does this affect the spreadsheet?
    TODO remove the hard wired sheet range
    TODO what to do with missing hams
 
@@ -23,6 +23,7 @@ import re
 import os
 import sys
 import traceback
+import math
 
 import unicodedata
 import sqlite3
@@ -43,7 +44,7 @@ class SimplexReportDatabase:
     An object that contains all the station and report information.
     """
     con = None
-    ham_locations_df = None
+    home_station_information_df = None
 
     def __init__(self, report_database_filename,
                  station_locations_filename=None,
@@ -72,7 +73,7 @@ class SimplexReportDatabase:
         else:
             self.con = sqlite3.connect(report_database_filename)
 
-        self.get_ham_locations()
+        self.read_all_base_station_information()
         self.wgs84_to_web_mercator()
 
     @staticmethod
@@ -82,7 +83,8 @@ class SimplexReportDatabase:
     def read_station_information_file(self, station_information_file):
         hams = []  # will be a list of dicts
         infile = open(station_information_file, 'r')
-        infile.readline()  # skip the header
+        infile.readline()  # skip the header line 1
+        infile.readline()  # skip the header line 2
 
         for line in infile:
             line = self.remove_control_characters(line)
@@ -131,9 +133,13 @@ class SimplexReportDatabase:
             cur.execute(command)
 
         cur.execute(
-            "CREATE TABLE RESPONSES (Id TEXT, ReportingTimestamp DATETIME, SubmittingCall TINYTEXT, DateOfNet DATE, " +
-            "FrequencyOfNet FLOAT, TransmitPower TINYTEXT, TransmitHeight TINYTEXT, SubmittedLatitude FLOAT, " +
-            "SubmittedLongitude FLOAT, Comment TEXT, ReceivedCall TINYTEXT, ReceivedQuality TINYTEXT)")
+            "CREATE TABLE RESPONSES (Id TEXT, ReportingTimestamp DATETIME, ReportingStation TINYTEXT, " +
+            "DateOfNet DATE, FrequencyOfNet FLOAT, " +
+            "TransmittingStation TINYTEXT, TransmittingStationPower TINYTEXT, TransmittingStationHeight TINYTEXT, " +
+            "TransmittingStationLatitude FLOAT, TransmittingStationLongitude FLOAT, " +
+            "ReceivingStation TINYTEXT, QSOQuality TINYTEXT, ReceivingStationHeight TINYTEXT, " +
+            "ReceivingStationLatitude FLOAT, ReceivingStationLongitude FLOAT)"
+        )
 
         self.con.commit()
 
@@ -182,7 +188,7 @@ class SimplexReportDatabase:
         return record_id
 
     @staticmethod
-    def build_response_dict(header, report):
+    def build_reception_dict(header, report):
         """
         make a dict of the calls and qualities for a given report
         :param header:
@@ -228,6 +234,10 @@ class SimplexReportDatabase:
         report[5] = re.sub('[\']', ' ft', report[5])
         report[5] = re.sub('[\"]', ' in', report[5])
 
+        # only numerals in lat and lon please
+        report[6] = re.sub('[Nn ]', '', report[6])
+        report[7] = re.sub('[Ww ]', '', report[7])
+
         for i, item in enumerate(report):
             if '\'' in item:
                 # remove any stray ' or " which will mess up the SQL command
@@ -239,6 +249,22 @@ class SimplexReportDatabase:
         return report
 
     def populate_database_with_reports(self, form_data):
+        """report fields are as follows:
+        0 Timestamp
+        1 Call sign reporting
+        2 Date of ARES simplex exercise
+        3 Frequency used, MHz
+        4 Transmit power, Watts (nearest value)	- of receiving station submitting the report
+        5 Antenna height, feet above sea level - of receiving station submitting the report
+        6 Latitude	 - of receiving station submitting the report
+        7 Longitude	 - of receiving station submitting the report
+        8 Comments - of receiving station submitting the report
+        9 onwards are the reception quality of the call signs listed in the report form
+
+        The reports are cycled through twice.  First to populate them into the database.
+        The second time is to look up the transmitting station and update the power, height and location
+        specific to each unique simplex net test, where there is a unique date, transmitting station and net frequency
+        """
         cur = self.con.cursor()
 
         header = form_data[0]
@@ -246,31 +272,46 @@ class SimplexReportDatabase:
 
         for report in reports:
 
-            responses, idx_start = self.build_response_dict(header, report)
-            record_id = self.build_record_id(report[2], report[1], report[3])
-
             clean_report = self.clean_up_report(report)
 
-            # add transmitting station location from the Hams table if not given in the report
-            if (len(report[6]) == 0) | (len(report[7]) == 0):
-                command = f"SELECT * FROM Hams WHERE Call=\'{report[1]}\'"
-                cur.execute(command)
-                transmit_ham = cur.fetchone()
+            # takes the call signs of the header and pairs them with the reception quality in the report
+            reception_ratings, idx_start = self.build_reception_dict(header, clean_report)
+            record_id = self.build_record_id(clean_report[2], clean_report[1], clean_report[3])
 
-                if transmit_ham is not None:
-                    report[6] = transmit_ham[2]
-                    report[7] = transmit_ham[3]
+            # add reporting (e.g. receiving) station location from the Hams table if not given in the report
+            if (len(clean_report[6]) == 0) | (len(clean_report[7]) == 0):
+                ham_info = self.get_one_base_station_information(clean_report[1])
+
+                if ham_info is not None:
+                    clean_report[6] = ham_info[2]
+                    clean_report[7] = ham_info[3]
+
+            for transmitting_station in reception_ratings.keys():
+                # TODO the problem with this is it looks up the base station information, and does
+                # not account for a ham that might be mobile
+                ham_info = self.get_one_base_station_information(transmitting_station)
+
+                if ham_info is None:
+                    transmitting_station_latitude = None
+                    transmitting_station_longitude = None
                 else:
-                    print(f'problem with {command} in populate_database_with_reports')
+                    transmitting_station_latitude = ham_info[2]
+                    transmitting_station_longitude = ham_info[3]
 
-            for call in responses.keys():
-                command = "INSERT INTO RESPONSES(Id, ReportingTimestamp, SubmittingCall, DateOfNet, FrequencyOfNet," +\
-                          " TransmitPower, TransmitHeight, SubmittedLatitude, SubmittedLongitude, Comment," +\
-                          " ReceivedCall, ReceivedQuality)" +\
-                          " VALUES ('{}', '{}', '{}', '{}', {}, '{}', '{}', '{}', '{}', '{}', '{}', '{}')".format(
-                              record_id, clean_report[0], clean_report[1], clean_report[2], clean_report[3],
-                              clean_report[4], clean_report[5], clean_report[6], clean_report[7], clean_report[8],
-                              call, responses[call])
+                command = "INSERT INTO RESPONSES (Id, ReportingTimestamp, ReportingStation, " +\
+                          "DateOfNet, FrequencyOfNet, " +\
+                          "TransmittingStation, TransmittingStationPower, TransmittingStationHeight, " +\
+                          "TransmittingStationLatitude, TransmittingStationLongitude, " +\
+                          "ReceivingStation, QSOQuality, ReceivingStationHeight, " +\
+                          "ReceivingStationLatitude, ReceivingStationLongitude) " +\
+                          "VALUES ('{}','{}','{}','{}',{},'{}','{}','{}','{}','{}','{}','{}','{}','{}','{}')".format(
+                            record_id, clean_report[0], clean_report[1],
+                            clean_report[2], clean_report[3],
+                            transmitting_station, None, None,
+                            transmitting_station_latitude, transmitting_station_longitude,
+                            clean_report[1], reception_ratings[transmitting_station], clean_report[5],
+                            clean_report[6], clean_report[7])
+
                 try:
                     cur.execute(command)
                 except sqlite3.Error as er:
@@ -279,29 +320,93 @@ class SimplexReportDatabase:
                     print('SQLite traceback: ')
                     exc_type, exc_value, exc_tb = sys.exc_info()
                     print(traceback.format_exception(exc_type, exc_value, exc_tb))
+                    print(command)
+
+        self.con.commit()
+
+        # we go through the reports and update for transmit height and power,
+        for report in reports:
+            transmitting_station = report[1]
+            transmit_power = report[4]
+            transmit_height = report[5]
+
+            ham_info = self.get_one_base_station_information(transmitting_station)
+            if report[6] is None or report[6] == '' or report[6] == 0:
+                transmit_latitude = ham_info[2]
+            if report[7] is None or report[7] == '' or report[7] == 0:
+                transmit_longitude = ham_info[3]
+
+            # check location within a certain radius of base station
+            if self.haversine((float(report[6]), float(report[6])), (ham_info[2], ham_info[3])) > 100:
+                transmit_latitude = report[6]
+                transmit_longitude = report[7]
+            else:
+                transmit_latitude = ham_info[2]
+                transmit_longitude = ham_info[3]
+
+            # find the reporting station amongst the transmitting stations for a given net date and net frequency
+            command_str = "UPDATE RESPONSES SET " +\
+                          "TransmittingStationPower=?, TransmittingStationHeight=?, " +\
+                          "TransmittingStationLatitude=?, TransmittingStationLongitude=? " +\
+                          "WHERE TransmittingStation=? AND DateOfNet=? AND FrequencyOfNet=?"
+
+            try:
+                cur.execute(command_str, (transmit_power, transmit_height, transmit_latitude, transmit_longitude,
+                                          transmitting_station, report[2], report[3]))
+            except sqlite3.Error as er:
+                print('SQLite error: %s' % (' '.join(er.args)))
+                print("Exception class is: ", er.__class__)
+                print('SQLite traceback: ')
+                exc_type, exc_value, exc_tb = sys.exc_info()
+                print(traceback.format_exception(exc_type, exc_value, exc_tb))
+                print(command_str)
 
         self.con.commit()
 
     def __del__(self):
         self.con.close()
 
-    def get_ham_locations(self):
-        """Fetch ham location data from the database
-        """
+    def read_all_base_station_information(self):
         # TODO with here may close the data file prematurely in normal operations
         with self.con:
-            self.ham_locations_df = pd.read_sql("SELECT * from Hams", self.con)
+            self.home_station_information_df = pd.read_sql("SELECT * from Hams", self.con)
 
-        self.ham_locations_df['Latitude'] = self.ham_locations_df['Latitude'].astype('float')
-        self.ham_locations_df['Longitude'] = self.ham_locations_df['Longitude'].astype('float')
-        self.ham_locations_df = self.ham_locations_df.drop(columns='Id')
+        self.home_station_information_df['Latitude'] = self.home_station_information_df['Latitude'].astype('float')
+        self.home_station_information_df['Longitude'] = self.home_station_information_df['Longitude'].astype('float')
+        self.home_station_information_df = self.home_station_information_df.drop(columns='Id')
 
-    def get_one_ham_reception_data(self, ham, frequency):
+    def get_one_base_station_information(self, call):
+        """fetch information for one or all stations"""
+        cur = self.con.cursor()
+
+        if call is not None:
+            command = f"SELECT * FROM Hams WHERE Call=\'{call}\'"
+            cur.execute(command)
+            station_information = cur.fetchone()
+        else:
+            # TODO read them all might be useful
+            station_information = None
+
+        if station_information is None:
+            pass
+            # print(f'problem with {command} in get_base_station_information')
+
+        # TODO use a dictionary to pass this information back
+        return station_information
+
+    def get_one_ham_reception_data(self, ham, frequency, net_date=None):
         """Fetch data from the database and arrange appropriately for mapping in a pandas dataframe
         """
         # TODO with here may close the data file prematurely in normal operations
         with self.con:
-            command = f"SELECT * from RESPONSES WHERE (ReceivedCall ='{ham}' AND FrequencyOfNet ={frequency})"
+            if net_date is None:
+                command = \
+                    f"SELECT * from RESPONSES WHERE (TransmittingStation ='{ham}' AND FrequencyOfNet ={frequency})"
+            else:
+                command = \
+                    f"SELECT * from RESPONSES WHERE (TransmittingStation ='{ham}' AND FrequencyOfNet ={frequency}" +\
+                    f" AND DateOfNet = '{net_date})"
+
             # print(command)
             df = pd.read_sql(command, self.con)
 
@@ -319,7 +424,7 @@ class SimplexReportDatabase:
         }
 
         n = []
-        for s in df['ReceivedQuality']:
+        for s in df['QSOQuality']:
             if coding[s] is None:
                 n.append(coding[s])
             else:
@@ -333,8 +438,34 @@ class SimplexReportDatabase:
         """Convert decimal longitude/latitude to Web Mercator format
         """
         k = 6378137
-        self.ham_locations_df["x"] = self.ham_locations_df[lon] * (k * np.pi / 180.0)
-        self.ham_locations_df["y"] = np.log(np.tan((90 + self.ham_locations_df[lat]) * np.pi / 360.0)) * k
+        self.home_station_information_df["x"] = self.home_station_information_df[lon] * (k * np.pi / 180.0)
+        self.home_station_information_df["y"] = \
+            np.log(np.tan((90 + self.home_station_information_df[lat]) * np.pi / 360.0)) * k
+
+    # noinspection SpellCheckingInspection
+    @staticmethod
+    def haversine(coord1, coord2):
+        # thanks to https://janakiev.com/blog/gps-points-distance-python/
+        r = 6372800  # Earth radius in meters
+        lat1, lon1 = coord1
+        lat2, lon2 = coord2
+
+        try:
+            phi1, phi2 = math.radians(lat1), math.radians(lat2)
+        except TypeError as er:
+            print(lat1, lat2)
+
+        try:
+            dphi = math.radians(lat2 - lat1)
+        except TypeError as er:
+            print(lat1, lat2)
+
+        dlambda = math.radians(lon2 - lon1)
+
+        a = math.sin(dphi / 2) ** 2 + \
+            math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2) ** 2
+
+        return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
     # TODO this may be redundant since I now put the location of the reporting ham in the data file
     def add_received_locations(self, reception_df):
@@ -344,14 +475,16 @@ class SimplexReportDatabase:
         lons = []
         x = []
         y = []
-        for ham in reception_df['SubmittingCall']:
+        for ham in reception_df['ReportingStation']:
             try:
-                lats.append(self.ham_locations_df.loc[(
-                    self.ham_locations_df['Call'].isin([ham]))]['Latitude'].values[0])
-                lons.append(self.ham_locations_df.loc[(
-                    self.ham_locations_df['Call'].isin([ham]))]['Longitude'].values[0])
-                x.append(self.ham_locations_df.loc[(self.ham_locations_df['Call'].isin([ham]))]['x'].values[0])
-                y.append(self.ham_locations_df.loc[(self.ham_locations_df['Call'].isin([ham]))]['y'].values[0])
+                lats.append(self.home_station_information_df.loc[(
+                    self.home_station_information_df['Call'].isin([ham]))]['Latitude'].values[0])
+                lons.append(self.home_station_information_df.loc[(
+                    self.home_station_information_df['Call'].isin([ham]))]['Longitude'].values[0])
+                x.append(self.home_station_information_df.loc[
+                             (self.home_station_information_df['Call'].isin([ham]))]['x'].values[0])
+                y.append(self.home_station_information_df.loc[
+                             (self.home_station_information_df['Call'].isin([ham]))]['y'].values[0])
             except:
                 print(f'{ham} missing from list of hams')
                 lats.append(None)
@@ -377,8 +510,8 @@ class SimplexReportDatabase:
 
         # Establishing a zoom scale for the map. The scale variable will also determine proportions
         # for hexbins and bubble maps so that everything looks visually appealing.
-        x = self.ham_locations_df['x']
-        y = self.ham_locations_df['y']
+        x = self.home_station_information_df['x']
+        y = self.home_station_information_df['y']
 
         # The range for the map extents is derived from the lat/lon fields. This way the map is
         # automatically centered on the plot elements.
@@ -422,19 +555,20 @@ class SimplexReportDatabase:
 
     def plot_station_reception(self,
                                transmitting_station,
-                               frequency,
+                               frequency, net_date=None,
                                map_scale=500,
                                map_extent=150):
         """plot the reception of a specific ham on a specific frequency
         for all reports in the database
         :param str transmitting_station: station call sign
         :param float frequency:
+        :param str net_date: date of simplex net, mm/dd/yyyy
         :param float map_scale:
         :param float map_extent:
         :return object: bokeh plot object
         """
         # get the reception data from the reports
-        reception_df = self.get_one_ham_reception_data(transmitting_station, frequency)
+        reception_df = self.get_one_ham_reception_data(transmitting_station, frequency, net_date)
         reception_df = self.add_reception_scaled_value(reception_df, map_scale)
         reception_df = self.add_received_locations(reception_df)
 
@@ -443,7 +577,7 @@ class SimplexReportDatabase:
 
         p = self.initiate_map_plot_object(map_scale, map_extent, None)
         # p = self.initiate_map_plot_object(map_scale, map_extent, title_string)
-        source_hamlist = ColumnDataSource(self.ham_locations_df)
+        source_hamlist = ColumnDataSource(self.home_station_information_df)
         source_reports = ColumnDataSource(reception_df)
 
         # Create the glyphs by hand first
@@ -462,8 +596,10 @@ class SimplexReportDatabase:
         g_reception_r = p.add_glyph(source_reports, g_reception)
 
         # add the transmitting ham
-        x = self.ham_locations_df.loc[(self.ham_locations_df['Call'].isin([transmitting_station]))]['x'].values[0]
-        y = self.ham_locations_df.loc[(self.ham_locations_df['Call'].isin([transmitting_station]))]['y'].values[0]
+        x = self.home_station_information_df.loc[
+            (self.home_station_information_df['Call'].isin([transmitting_station]))]['x'].values[0]
+        y = self.home_station_information_df.loc[
+            (self.home_station_information_df['Call'].isin([transmitting_station]))]['y'].values[0]
         g_transmitting = Asterisk(x=x, y=y, size=10, line_color='blue')
         g_transmitting_r = p.add_glyph(g_transmitting)
 
@@ -496,13 +632,13 @@ class SimplexReportDatabase:
         if os.path.exists(html_path):
             os.remove(html_path)
 
-        for station in self.ham_locations_df['Call']:
+        for station in self.home_station_information_df['Call']:
             one_plot = self.plot_station_reception(station, frequency)
             plot_list.append(one_plot)
 
         output_file(html_path)
 
-        print(f'generated plots for {len(self.ham_locations_df)} call signs')
+        print(f'generated plots for {len(self.home_station_information_df)} call signs')
 
         g = gridplot(plot_list, ncols=2, plot_width=400, plot_height=600)
         show(g)
