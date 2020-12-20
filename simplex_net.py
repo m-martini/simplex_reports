@@ -27,6 +27,7 @@ import math
 
 import unicodedata
 import sqlite3
+# import sqlite
 import httplib2
 from apiclient import discovery
 import pandas as pd
@@ -331,35 +332,39 @@ class SimplexReportDatabase:
             transmit_height = report[5]
 
             ham_info = self.get_one_base_station_information(transmitting_station)
-            if report[6] is None or report[6] == '' or report[6] == 0:
-                transmit_latitude = ham_info[2]
-            if report[7] is None or report[7] == '' or report[7] == 0:
-                transmit_longitude = ham_info[3]
 
-            # check location within a certain radius of base station
-            if self.haversine((float(report[6]), float(report[6])), (ham_info[2], ham_info[3])) > 100:
-                transmit_latitude = report[6]
-                transmit_longitude = report[7]
+            if ham_info is not None:
+                if report[6] is None or report[6] == '' or report[6] == 0:
+                    transmit_latitude = ham_info[2]
+                if report[7] is None or report[7] == '' or report[7] == 0:
+                    transmit_longitude = ham_info[3]
+
+                # check location within a certain radius of base station
+                if self.haversine((float(report[6]), float(report[6])), (ham_info[2], ham_info[3])) > 100:
+                    transmit_latitude = report[6]
+                    transmit_longitude = report[7]
+                else:
+                    transmit_latitude = ham_info[2]
+                    transmit_longitude = ham_info[3]
+
+                # find the reporting station amongst the transmitting stations for a given net date and net frequency
+                command_str = "UPDATE RESPONSES SET " +\
+                              "TransmittingStationPower=?, TransmittingStationHeight=?, " +\
+                              "TransmittingStationLatitude=?, TransmittingStationLongitude=? " +\
+                              "WHERE TransmittingStation=? AND DateOfNet=? AND FrequencyOfNet=?"
+
+                try:
+                    cur.execute(command_str, (transmit_power, transmit_height, transmit_latitude, transmit_longitude,
+                                              transmitting_station, report[2], report[3]))
+                except sqlite3.Error as er:
+                    print('SQLite error: %s' % (' '.join(er.args)))
+                    print("Exception class is: ", er.__class__)
+                    print('SQLite traceback: ')
+                    exc_type, exc_value, exc_tb = sys.exc_info()
+                    print(traceback.format_exception(exc_type, exc_value, exc_tb))
+                    print(command_str)
             else:
-                transmit_latitude = ham_info[2]
-                transmit_longitude = ham_info[3]
-
-            # find the reporting station amongst the transmitting stations for a given net date and net frequency
-            command_str = "UPDATE RESPONSES SET " +\
-                          "TransmittingStationPower=?, TransmittingStationHeight=?, " +\
-                          "TransmittingStationLatitude=?, TransmittingStationLongitude=? " +\
-                          "WHERE TransmittingStation=? AND DateOfNet=? AND FrequencyOfNet=?"
-
-            try:
-                cur.execute(command_str, (transmit_power, transmit_height, transmit_latitude, transmit_longitude,
-                                          transmitting_station, report[2], report[3]))
-            except sqlite3.Error as er:
-                print('SQLite error: %s' % (' '.join(er.args)))
-                print("Exception class is: ", er.__class__)
-                print('SQLite traceback: ')
-                exc_type, exc_value, exc_tb = sys.exc_info()
-                print(traceback.format_exception(exc_type, exc_value, exc_tb))
-                print(command_str)
+                print(f'need location info for {transmitting_station}, record not updated')
 
         self.con.commit()
 
@@ -388,8 +393,7 @@ class SimplexReportDatabase:
             station_information = None
 
         if station_information is None:
-            pass
-            # print(f'problem with {command} in get_base_station_information')
+            print(f'{call} not found in list of ham locations')
 
         # TODO use a dictionary to pass this information back
         return station_information
@@ -404,8 +408,8 @@ class SimplexReportDatabase:
                     f"SELECT * from RESPONSES WHERE (TransmittingStation ='{ham}' AND FrequencyOfNet ={frequency})"
             else:
                 command = \
-                    f"SELECT * from RESPONSES WHERE (TransmittingStation ='{ham}' AND FrequencyOfNet ={frequency}" +\
-                    f" AND DateOfNet = '{net_date})"
+                    f"SELECT * from RESPONSES WHERE (TransmittingStation='{ham}' AND FrequencyOfNet={frequency}" +\
+                    f" AND DateOfNet=\'{net_date}\')"
 
             # print(command)
             df = pd.read_sql(command, self.con)
@@ -641,5 +645,6 @@ class SimplexReportDatabase:
         print(f'generated plots for {len(self.home_station_information_df)} call signs')
 
         g = gridplot(plot_list, ncols=2, plot_width=400, plot_height=600)
+
         show(g)
 
