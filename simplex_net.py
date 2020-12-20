@@ -577,7 +577,10 @@ class SimplexReportDatabase:
         reception_df = self.add_received_locations(reception_df)
 
         # Create the base map and plot, do not add hover tool yet
-        title_string = f'where {transmitting_station} was heard on {frequency}'
+        if net_date is None:
+            title_string = f'where {transmitting_station} was heard on {frequency}'
+        else:
+            title_string = f'where {transmitting_station} was heard on {frequency}, {net_date}'
 
         p = self.initiate_map_plot_object(map_scale, map_extent, None)
         # p = self.initiate_map_plot_object(map_scale, map_extent, title_string)
@@ -628,7 +631,7 @@ class SimplexReportDatabase:
 
         return p
 
-    def plot_all_stations_to_html(self, frequency, html_path="index.html"):
+    def plot_all_stations_to_html(self, frequency, net_date=None, html_path="index.html"):
         """make reception plots for all the stations in the Hams table
         """
         plot_list = []
@@ -637,7 +640,7 @@ class SimplexReportDatabase:
             os.remove(html_path)
 
         for station in self.home_station_information_df['Call']:
-            one_plot = self.plot_station_reception(station, frequency)
+            one_plot = self.plot_station_reception(station, frequency, net_date=net_date)
             plot_list.append(one_plot)
 
         output_file(html_path)
