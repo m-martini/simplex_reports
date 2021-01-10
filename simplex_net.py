@@ -24,6 +24,8 @@ import os
 import sys
 import traceback
 import math
+import datetime
+import shutil
 
 import unicodedata
 import sqlite3
@@ -51,7 +53,7 @@ class SimplexReportDatabase:
                  station_locations_filename=None,
                  spreadsheet_id=None,
                  range_name=None,
-                 key=None,
+                 google_key=None,
                  recreate_database=False):
         """
 
@@ -60,15 +62,19 @@ class SimplexReportDatabase:
         :param str spreadsheet_id: google spreadsheet id
                     # google_sheet_url = r'https://docs.google.com/spreadsheets/d/the_id_is_here/edit#gid=66781920'
         :param str range_name:  range of google sheet to load
-        :param str key:  google api key for sheets access
+        :param str google_key:  google api key for sheets access
         :param bool recreate_database:  True to force replacement of database
         """
         if recreate_database:
             if os.path.exists(report_database_filename):
+                n = datetime.datetime.today()
+                backup_database_filename = report_database_filename+'%4d%02d%02d%02d%02d%02d' \
+                    % (n.year, n.month, n.day, n.hour, n.minute, n.second)
+                shutil.copy(report_database_filename, backup_database_filename)
                 os.remove(report_database_filename)
 
             hams = self.read_station_information_file(station_locations_filename)
-            form_data = self.get_form_results(spreadsheet_id, range_name, key)
+            form_data = self.get_form_results(spreadsheet_id, range_name, google_key)
             self.initialize_new_database(hams, report_database_filename)
             self.populate_database_with_reports(form_data)
         else:
@@ -136,7 +142,7 @@ class SimplexReportDatabase:
         cur.execute(
             "CREATE TABLE RESPONSES (Id TEXT, ReportingTimestamp DATETIME, ReportingStation TINYTEXT, " +
             "DateOfNet DATE, FrequencyOfNet FLOAT, " +
-            "TransmittingStation TINYTEXT, TransmittingStationPower TINYTEXT, TransmittingStationHeight TINYTEXT, " +
+            "TransmittingStation TINYTEXT, TransmittingStationPower FLOAT, TransmittingStationHeight FLOAT, " +
             "TransmittingStationLatitude FLOAT, TransmittingStationLongitude FLOAT, " +
             "ReceivingStation TINYTEXT, QSOQuality TINYTEXT, ReceivingStationHeight TINYTEXT, " +
             "ReceivingStationLatitude FLOAT, ReceivingStationLongitude FLOAT)"
@@ -217,8 +223,22 @@ class SimplexReportDatabase:
         return responses, idx_first_call
 
     @staticmethod
-    def clean_up_report(report):
+    def ddmmss2dec(dms):
+        """ convert from deg, min sec to decimal degrees
+        :param list dms:  list of float degrees, minutes, seconds
+        """
+        dd = dms[2] / 60
+        dd = (dms[1] + dd) / 60
+        dd = dms[0] + dd
+
+        return dd
+
+    def clean_up_report(self, report):
         """catch all the foibles of hams entering data improperly"""
+
+        # need to catch negative lat and lon from a variety of text inputs
+        south = False
+        west = False
 
         # call sign should be just the call sign
         call_str = report[1].split()
@@ -236,8 +256,52 @@ class SimplexReportDatabase:
         report[5] = re.sub('[\"]', ' in', report[5])
 
         # only numerals in lat and lon please
+        # trap degrees West and South make sure they are negative
+        # if someone starts with - and ends with N this will NOT catch it
+        if report[6].upper().find('S') >= 0:
+            south = True
+
+        if report[7].upper().find('W') >= 0:
+            west = True
+
         report[6] = re.sub('[Nn ]', '', report[6])
         report[7] = re.sub('[Ww ]', '', report[7])
+
+        # catch '-' in lat and lon, convert to decimal if it is in 3 parts,
+        # but only if it is dd-mm-ss
+        if report[6].count('-') > 1:
+            lat = report[6].split('-')
+            lat = [float(x) for x in lat]
+            lat = self.ddmmss2dec(lat)
+
+            if south and lat >= 0:
+                lat = -lat
+
+            report[6] = lat
+
+        if report[7].count('-') > 1:
+            lon = report[7].split('-')
+            lon = [float(x) for x in lon]
+            lon = self.ddmmss2dec(lon)
+
+            if west and lon >= 0:
+                lon = -lon
+
+            report[7] = lon
+
+        # make sure transmit power and height are stored as floats,
+        # they come in from google form as strings, not always consistent
+        # TODO do a better cleanup job here
+        if type(report[4]) == 'str':
+            try:
+                report[4] = float(report[4])
+            except TypeError:
+                report[4] = None
+        if type(report[5]) == 'str':
+            try:
+                report[5] = float(report[5])
+            except TypeError:
+                report[5] = None
 
         for i, item in enumerate(report):
             if '\'' in item:
@@ -566,11 +630,13 @@ class SimplexReportDatabase:
         for all reports in the database
         :param str transmitting_station: station call sign
         :param float frequency:
-        :param str net_date: date of simplex net, mm/dd/yyyy
+        :param str net_date: date of simplex net, mm/dd/yyyy, do not pad with zeros
         :param float map_scale:
         :param float map_extent:
         :return object: bokeh plot object
         """
+        # TODO accept dates padded with zeros e.g. 01/07/2021
+
         # get the reception data from the reports
         reception_df = self.get_one_ham_reception_data(transmitting_station, frequency, net_date)
         reception_df = self.add_reception_scaled_value(reception_df, map_scale)
@@ -582,6 +648,15 @@ class SimplexReportDatabase:
         else:
             title_string = f'where {transmitting_station} was heard on {frequency}, {net_date}'
 
+        if all([x == 'None' for x in reception_df['TransmittingStationPower'].to_list()]):
+            title_string_transmit_power = 'station may not have participated in this net, no power data found'
+        else:
+            try:
+                title_string_transmit_power = 'using mean transmit power of {} watts'.format(
+                    reception_df['TransmittingStationPower'].mean())
+            except:
+                title_string_transmit_power = None
+
         p = self.initiate_map_plot_object(map_scale, map_extent, None)
         # p = self.initiate_map_plot_object(map_scale, map_extent, title_string)
         source_hamlist = ColumnDataSource(self.home_station_information_df)
@@ -590,14 +665,10 @@ class SimplexReportDatabase:
         # Create the glyphs by hand first
 
         # add the participating hams
-        # g_hamlist = Circle(x='x', y='y', size=5)
-        # g_hamlist_r = p.add_glyph(source_hamlist, g_hamlist)
         g_hamlist = Dot(x='x', y='y', size=10)
         g_hamlist_r = p.add_glyph(source_hamlist, g_hamlist)
 
         # add the reception information
-        # g_reception = Circle(x='ReceivedX',y='ReceivedY', size=10, line_color='green',
-        #                     fill_color='green', radius='ReceivedQualityValue')
         g_reception = Circle(x='ReceivedX', y='ReceivedY', size=10, line_color='green',
                              fill_color=None, radius='ReceivedQualityValue')
         g_reception_r = p.add_glyph(source_reports, g_reception)
@@ -617,17 +688,25 @@ class SimplexReportDatabase:
                            background_fill_color='white', background_fill_alpha=1.0)
 
         # now add the over tool for this data, only for the participating hams
+        # TODO try this with setting of mode='mouse'
+        #  per https://docs.bokeh.org/en/latest/docs/user_guide/tools.html#hit-testing-behavior
         g_hamlist_hover = HoverTool(renderers=[g_hamlist_r], tooltips=[('', '@Call')])
         p.add_tools(g_hamlist_hover)
 
-        p.add_layout(Legend(items=[LegendItem(label='Station', renderers=[g_hamlist_r]),
-                                   LegendItem(label='Reception', renderers=[g_reception_r]),
-                                   LegendItem(label='Transmission', renderers=[g_transmitting_r])]))
-        p.add_layout(plot_label)
-
-        p.add_layout(Label(x=10, y=12, x_units='screen', y_units='screen',
+        # add text within the plot to save room
+        # https://docs.bokeh.org/en/latest/docs/user_guide/layout.html#userguide-layout
+        p.add_layout(Label(x=10, y=46, x_units='screen', y_units='screen',
+                           text=title_string,
+                           render_mode='css',
+                           background_fill_color='white', background_fill_alpha=1.0))
+        p.add_layout(Label(x=10, y=30, x_units='screen', y_units='screen',
                            text='circles: G/R large, W/R small', render_mode='css',
                            background_fill_color='white', background_fill_alpha=1.0))
+        if title_string_transmit_power is not None:
+            p.add_layout(Label(x=10, y=12, x_units='screen', y_units='screen',
+                               text=title_string_transmit_power, render_mode='css',
+                               text_font_size='8pt',
+                               background_fill_color='white', background_fill_alpha=1.0))
 
         return p
 
@@ -640,6 +719,8 @@ class SimplexReportDatabase:
             os.remove(html_path)
 
         for station in self.home_station_information_df['Call']:
+            # TODO here use get_one_ham_reception_data and filter for any W/R or G/R
+            # but how do we know the person did nor did not participate in the net?
             one_plot = self.plot_station_reception(station, frequency, net_date=net_date)
             plot_list.append(one_plot)
 

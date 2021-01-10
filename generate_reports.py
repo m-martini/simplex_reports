@@ -1,4 +1,6 @@
 """generate web pages with plots for both frequencies to include at FARA web site
+
+Superceded by generate_all_reports.py 1/10/2021
 """
 from simplex_net import SimplexReportDatabase as srd
 
@@ -19,7 +21,7 @@ db = srd(report_database_filename,
          station_locations_filename=station_locations_filename,
          spreadsheet_id=spreadsheet_id,
          range_name=range_name,
-         key=key,
+         google_key=key,
          recreate_database=False)
 
 plot_file_list = []

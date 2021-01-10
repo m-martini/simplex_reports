@@ -14,14 +14,13 @@ report_database_filename = '2mreports.db'
 # we want to plot who heard this ham, how well and where
 station_transmitting = 'W1FX'
 frequencies = [146.58, 446.25]
-dates = ['11/5/2020', '11/19/2020', '12/3/2020', '12/17/2020']
+dates = ['11/5/2020', '11/19/2020', '12/3/2020', '12/17/2020', '1/7/2021']
 
 db = srd(report_database_filename,
          station_locations_filename=station_locations_filename,
          spreadsheet_id=spreadsheet_id,
          range_name=range_name,
-         key=key,
-         recreate_database=False)
+         google_key=key)
 
 # first aggregate all dates
 plot_file_list1 = []
@@ -53,7 +52,9 @@ with open('index.html', 'w') as fp:
 
     fp.write("<h1>Reception Maps for individual ARES Simplex Nets</h1>\n")
     fp.write("<p>Note that if there are no QSOs indicated a certain call sign map, ")
-    fp.write("that station may not have participated in that night\'s net</p>")
+    fp.write("that station may not have participated in that night\'s net.")
+    fp.write("So you might see a map for a night in which you did not participate, ")
+    fp.write("with no recorded QSOs.  That is normal.</p>")
     for t in plot_file_list2:
         fp.write(f"\t<a target=\"_blank\" href=\"{t[2]}\"> {t[1]} {t[0]} MHz </a><br>\n")
 
